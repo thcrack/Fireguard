@@ -3,71 +3,96 @@ using System.Collections;
 using System.Collections.Generic;
 using System.IO;
 using System.Reflection.Metadata;
+using System.Xml.Xsl;
 
 namespace Fireguard
 {
     class Program
     {
         private static Dictionary<int, List<int>> records = new Dictionary<int, List<int>>();
+        private static Dictionary<int, string> dayToDate = new Dictionary<int, string>();
+        private static Dictionary<int, Person> personLookup = new Dictionary<int, Person>();
         
         static void Main(string[] args)
         {
-            for (int i = 0; i < 1; i++)
+            using var writer = new StreamWriter($"{DateTime.Now:yyyy-MM-dd-HH-mm-ss}.txt");
+            var day = 1;
+            var persons = PopulatePersons(ref day);
+            foreach (var person in persons)
             {
-                records.Clear();
-                var day = 1;
-                var persons = PopulatePersons(ref day);
-                Console.WriteLine(day);
-                for (; day <= 54; day++)
+                personLookup.Add(person.Id, person);
+            }
+            for (; day <= 50; day++)
+            {
+                // GenerateSchedule(persons, 1, day);
+                // GenerateSchedule(persons, 2, day);
+                // BalanceTeams(persons, day);
+                var result = new List<Person>();
+                GenerateSchedule(persons, 1, day, result);
+                GenerateSchedule(persons, 2, day, result);
+                Shuffle(result);
+                result.Sort((a, b) => a.Team - b.Team);
+                foreach (var person in result)
                 {
-                    // GenerateSchedule(persons, 1, day);
-                    // GenerateSchedule(persons, 2, day);
-                    // BalanceTeams(persons, day);
-                    
-                    GenerateSchedule(persons, 0, day);
+                    writer.Write($"{person.Id},");
                 }
-                
-                var dump = new List<KeyValuePair<int, List<int>>>();
-                foreach (var k in records) dump.Add(k);
-                dump.Sort((a, b) => a.Key - b.Key);
-                foreach (var (key, value) in dump)
+                writer.WriteLine();
+            }
+            
+            LoadDayToDate();
+            
+            var dump = new List<KeyValuePair<int, List<int>>>();
+            foreach (var k in records) dump.Add(k);
+            dump.Sort((a, b) => a.Key - b.Key);
+            foreach (var (key, value) in dump)
+            {
+                writer.Write($"{key}\t");
+                writer.Write($"{dayToDate[personLookup[key].LeaveDay]}\t");
+                var last = -1000;
+                var smallestGap = 100;
+                foreach (var d in value)
                 {
-                    Console.Write($"Id {key}:\t");
-                    var last = -1000;
-                    var smallestGap = 100;
-                    foreach (var d in value)
-                    {
-                        Console.Write($"{d},\t");
-                        smallestGap = Math.Min(smallestGap, d - last);
-                        last = d;
-                    }
-                    Console.WriteLine();
-                    //Console.WriteLine($"Smallest Gap: {smallestGap}");
+                    writer.Write($"{dayToDate[d]}\t");
+                    smallestGap = Math.Min(smallestGap, d - last);
+                    last = d;
                 }
-                
-                var cnt = new Dictionary<int, int>();
-                foreach (var (key, value) in records)
-                {
-                    if (!cnt.TryAdd(value.Count, 1)) cnt[value.Count]++;
-                }
+                writer.WriteLine();
+                //writer.WriteLine($"Smallest Gap: {smallestGap}");
+            }
+            
+            var cnt = new Dictionary<int, int>();
+            foreach (var (key, value) in records)
+            {
+                if (!cnt.TryAdd(value.Count, 1)) cnt[value.Count]++;
+            }
 
-                foreach (var (key, value) in cnt)
-                {
-                    Console.WriteLine($"{key} times: {value} persons");
-                }
+            foreach (var (key, value) in cnt)
+            {
+                Console.WriteLine($"{key} times: {value} persons");
             }
         }
 
-        private static void GenerateSchedule(List<Person> persons, int team, int day)
+        private static void LoadDayToDate()
+        {
+            using var reader = new StreamReader("d2d.csv");
+            string line;
+            while ((line = reader.ReadLine()) != null)
+            {
+                var strings = line.Split(',');
+                dayToDate.Add(int.Parse(strings[0]), strings[1]);
+            }
+        }
+
+        private static void GenerateSchedule(List<Person> persons, int team, int day, List<Person> result)
         {
             var candidates = new List<Person>();
-            int minGap = 2;
-            while (candidates.Count < ((team == 0) ? 16 : 8) && minGap >= 2)
+            int minGap = 4;
+            while (candidates.Count < 8 && minGap >= 2)
             {
                 candidates.Clear();
                 foreach (var person in persons)
                 {
-                    if ((team == 0 || person.Team == team) && person.LeaveDay >= day && day - person.LastDay >= minGap && person.TimesDone <= 7)
+                    if (person.LeaveDay >= day && day - person.LastDay >= minGap && person.TimesDone <= 7)
                     {
                         candidates.Add(person);
                     }
@@ -78,26 +103,22 @@ namespace Fireguard
 
             candidates.Sort((a, b) =>
             {
-                var ar = (double) a.TimesLeft / (a.LeaveDay - day + 1);
-                var br = (double) b.TimesLeft / (b.LeaveDay - day + 1);
+                var ar = (double) a.TimesLeft / (a.LeaveDay - day + 2);
+                var br = (double) b.TimesLeft / (b.LeaveDay - day + 2);
                 if (ar != br) return (ar < br) ? 1 : -1;
-                if(a.TimesDone != b.TimesDone) return a.TimesDone - b.TimesDone;
+                if (a.TimesDone != b.TimesDone) return a.TimesDone - b.TimesDone;
+                if (a.Team != b.Team) return team == 1 ? a.Team - b.Team : b.Team - a.Team;
                 return a.TieBreaker - b.TieBreaker;
             });
 
-            for (var i = 0; i < ((team == 0) ? 16 : 8) && i < candidates.Count; i++)
+            for (var i = 0; i < 8 && i < candidates.Count; i++)
             {
                 candidates[i].LastDay = day;
                 candidates[i].TimesLeft--;
                 candidates[i].TimesDone++;
                 records[candidates[i].Id].Add(day);
+                result.Add(candidates[i]);
             }
-            Console.Write($"Day {day}: Team {team}: ");
-            for (var i = 0; i < ((team == 0) ? 16 : 8) && i < candidates.Count; i++)
-            {
-                Console.Write($"{candidates[i].Id},\t ");
-            }
-            Console.WriteLine();
         }
 
         private static void BalanceTeams(List<Person> persons, int day)
@@ -215,30 +236,14 @@ namespace Fireguard
                     }
                 }
 
-                int totalPeopleCnt = 125, sevenCnt = 98;
-                var rand = new Random();
-
                 foreach (var (key, value) in cnt)
                 {
-                    var left = 6 - value;
-                    if (key != 107 && key != 94 && rand.Next(totalPeopleCnt) < sevenCnt)
-                    {
-                        left++;
-                        sevenCnt--;
-                    }
-                    totalPeopleCnt--;
-                    ret.Add(new Person(key, team[key], value, left, lastDay[key], leaveDay[key]));
+                    var left = 7 - value;
+                    var newPerson = new Person(key, team[key], value, left, lastDay[key], leaveDay[key]);
+                    ret.Add(newPerson);
                 }
-                
-                // ret.Sort((a, b) => a.LeaveDay - b.LeaveDay);
-                // for (var i = 0; i < 98; i++) ret[i].TimesLeft++;
                 
                 ret.Sort((a, b) => a.Id - b.Id);
-
-                foreach (var person in ret)
-                {
-                    //Console.WriteLine(person.ToString());
-                }
             }
             Shuffle(ret);
             return ret;
